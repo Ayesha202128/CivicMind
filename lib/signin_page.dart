@@ -1,23 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-class SignupPage extends StatefulWidget {
-  const SignupPage({super.key});
+class SigninPage extends StatefulWidget {
+  const SigninPage({super.key});
 
   @override
-  State<SignupPage> createState() => _SignupPageState();
+  State<SigninPage> createState() => _SigninPageState();
 }
 
-class _SignupPageState extends State<SignupPage> {
+class _SigninPageState extends State<SigninPage> {
   final _formKey = GlobalKey<FormState>();
 
   final emailController = TextEditingController();
   final passwordController = TextEditingController();
-  final confirmPasswordController = TextEditingController();
 
   bool isLoading = false;
   bool obscurePassword = true;
-  bool obscureConfirmPassword = true;
 
   final Color primaryColor = const Color(0xFF4F46E5);
 
@@ -25,7 +23,6 @@ class _SignupPageState extends State<SignupPage> {
   void dispose() {
     emailController.dispose();
     passwordController.dispose();
-    confirmPasswordController.dispose();
     super.dispose();
   }
 
@@ -52,22 +49,6 @@ class _SignupPageState extends State<SignupPage> {
       return 'Please enter a valid email address';
     }
 
-    if (email.contains('..')) {
-      return 'Please enter a valid email address';
-    }
-
-    final parts = email.split('@');
-
-    if (parts.length != 2) {
-      return 'Please enter a valid email address';
-    }
-
-    final domain = parts[1];
-
-    if (domain.startsWith('.') || domain.endsWith('.')) {
-      return 'Please enter a valid email address';
-    }
-
     return null;
   }
 
@@ -76,24 +57,18 @@ class _SignupPageState extends State<SignupPage> {
   // ----------------------------------------------------------
 
   String? validatePassword(String? value) {
-    final password = value ?? '';
-
-    if (password.isEmpty) {
-      return 'Please enter a password';
-    }
-
-    if (password.length < 6) {
-      return 'Password must be at least 6 characters';
+    if (value == null || value.isEmpty) {
+      return 'Please enter your password';
     }
 
     return null;
   }
 
   // ----------------------------------------------------------
-  // SIGNUP
+  // SIGN IN
   // ----------------------------------------------------------
 
-  Future<void> signup() async {
+  Future<void> signin() async {
     if (!_formKey.currentState!.validate()) {
       return;
     }
@@ -106,42 +81,48 @@ class _SignupPageState extends State<SignupPage> {
     });
 
     try {
-      final response = await Supabase.instance.client.auth.signUp(
+      final response = await Supabase.instance.client.auth.signInWithPassword(
         email: email,
         password: password,
-        emailRedirectTo: Uri.base.origin,
       );
+
       if (!mounted) return;
 
-      final user = response.user;
-
-      // ------------------------------------------------------
-      // EXISTING ACCOUNT DETECTION
-      // ------------------------------------------------------
-
-      if (user != null && user.identities != null && user.identities!.isEmpty) {
-        showAlreadyAccountMessage();
-        return;
-      }
-
-      // ------------------------------------------------------
-      // NEW ACCOUNT
-      // ------------------------------------------------------
-
-      if (user != null) {
-        Navigator.pushReplacementNamed(
-          context,
-          '/verify-email',
-          arguments: email,
-        );
+      if (response.session != null && response.user != null) {
+        Navigator.pushNamedAndRemoveUntil(context, '/home', (route) => false);
       }
     } on AuthException catch (error) {
       if (!mounted) return;
 
-      if (isExistingAccountError(error)) {
-        showAlreadyAccountMessage();
-      } else {
-        showErrorMessage(getFriendlyAuthError(error));
+      final code = error.code?.toLowerCase() ?? '';
+      final message = error.message.toLowerCase();
+
+      // ------------------------------------------------------
+      // EMAIL NOT VERIFIED
+      // ------------------------------------------------------
+
+      if (code == 'email_not_confirmed' ||
+          message.contains('email not confirmed')) {
+        showVerificationRequired();
+      }
+      // ------------------------------------------------------
+      // WRONG EMAIL / PASSWORD
+      // ------------------------------------------------------
+      else if (code == 'invalid_credentials' ||
+          message.contains('invalid login credentials')) {
+        showErrorMessage('Invalid email or password.');
+      }
+      // ------------------------------------------------------
+      // USER BANNED
+      // ------------------------------------------------------
+      else if (code == 'user_banned') {
+        showErrorMessage('This account is currently unavailable.');
+      }
+      // ------------------------------------------------------
+      // OTHER ERROR
+      // ------------------------------------------------------
+      else {
+        showErrorMessage('Unable to sign in. Please try again.');
       }
     } catch (error) {
       if (!mounted) return;
@@ -157,65 +138,77 @@ class _SignupPageState extends State<SignupPage> {
   }
 
   // ----------------------------------------------------------
-  // EXISTING ACCOUNT ERROR
+  // RESEND VERIFICATION EMAIL
   // ----------------------------------------------------------
 
-  bool isExistingAccountError(AuthException error) {
-    final code = error.code?.toLowerCase() ?? '';
-    final message = error.message.toLowerCase();
+  Future<void> resendVerification() async {
+    final email = emailController.text.trim();
 
-    return code == 'user_already_exists' ||
-        code == 'email_exists' ||
-        message.contains('user already registered') ||
-        message.contains('already registered');
+    if (email.isEmpty) {
+      showErrorMessage('Enter your email address first.');
+      return;
+    }
+
+    try {
+      await Supabase.instance.client.auth.resend(
+        type: OtpType.signup,
+        email: email,
+      );
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: const Color(0xFF16A34A),
+          margin: const EdgeInsets.all(16),
+          duration: const Duration(seconds: 4),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          content: const Row(
+            children: [
+              Icon(Icons.mark_email_read_outlined, color: Colors.white),
+              SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Verification email sent again.',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    } on AuthException catch (error) {
+      if (!mounted) return;
+
+      showErrorMessage(error.message);
+    }
   }
 
   // ----------------------------------------------------------
-  // FRIENDLY AUTH ERRORS
+  // EMAIL VERIFICATION REQUIRED
   // ----------------------------------------------------------
 
-  String getFriendlyAuthError(AuthException error) {
-    final code = error.code?.toLowerCase() ?? '';
-    final message = error.message.toLowerCase();
-
-    if (code == 'weak_password') {
-      return 'Your password is too weak. Please use a stronger password.';
-    }
-
-    if (code == 'email_address_invalid') {
-      return 'Please enter a valid email address.';
-    }
-
-    if (message.contains('rate limit')) {
-      return 'Too many attempts. Please wait a little and try again.';
-    }
-
-    if (message.contains('email')) {
-      return 'Unable to create account with this email.';
-    }
-
-    return 'Unable to create your account. Please try again.';
-  }
-
-  // ----------------------------------------------------------
-  // ALREADY ACCOUNT MESSAGE
-  // ----------------------------------------------------------
-
-  void showAlreadyAccountMessage() {
+  void showVerificationRequired() {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         behavior: SnackBarBehavior.floating,
-        backgroundColor: const Color(0xFF374151),
+        backgroundColor: const Color(0xFFD97706),
         margin: const EdgeInsets.all(16),
-        duration: const Duration(seconds: 4),
+        duration: const Duration(seconds: 7),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-        content: Row(
+        content: const Row(
           children: [
-            const Icon(Icons.account_circle_outlined, color: Colors.white),
-            const SizedBox(width: 12),
-            const Expanded(
+            Icon(Icons.mark_email_unread_outlined, color: Colors.white),
+            SizedBox(width: 12),
+            Expanded(
               child: Text(
-                'You already have an account. Please sign in.',
+                'Please verify your email before signing in.',
                 style: TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.w600,
@@ -223,6 +216,15 @@ class _SignupPageState extends State<SignupPage> {
               ),
             ),
           ],
+        ),
+
+        // ----------------------------------------------------
+        // RESEND BUTTON
+        // ----------------------------------------------------
+        action: SnackBarAction(
+          label: 'RESEND',
+          textColor: Colors.white,
+          onPressed: resendVerification,
         ),
       ),
     );
@@ -325,7 +327,9 @@ class _SignupPageState extends State<SignupPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    // ------------------------------------------------
                     // LOGO
+                    // ------------------------------------------------
                     Container(
                       width: 72,
                       height: 72,
@@ -343,7 +347,7 @@ class _SignupPageState extends State<SignupPage> {
                     const SizedBox(height: 28),
 
                     const Text(
-                      'Create Account',
+                      'Welcome Back',
                       style: TextStyle(
                         fontSize: 30,
                         fontWeight: FontWeight.w800,
@@ -354,17 +358,15 @@ class _SignupPageState extends State<SignupPage> {
                     const SizedBox(height: 8),
 
                     const Text(
-                      'Join CivicMind and help make your community better.',
-                      style: TextStyle(
-                        fontSize: 15,
-                        color: Color(0xFF6B7280),
-                        height: 1.5,
-                      ),
+                      'Sign in to continue to CivicMind.',
+                      style: TextStyle(fontSize: 15, color: Color(0xFF6B7280)),
                     ),
 
                     const SizedBox(height: 32),
 
+                    // ------------------------------------------------
                     // EMAIL
+                    // ------------------------------------------------
                     TextFormField(
                       controller: emailController,
                       keyboardType: TextInputType.emailAddress,
@@ -380,16 +382,18 @@ class _SignupPageState extends State<SignupPage> {
 
                     const SizedBox(height: 18),
 
+                    // ------------------------------------------------
                     // PASSWORD
+                    // ------------------------------------------------
                     TextFormField(
                       controller: passwordController,
                       obscureText: obscurePassword,
-                      textInputAction: TextInputAction.next,
+                      textInputAction: TextInputAction.done,
                       validator: validatePassword,
 
-                      onChanged: (_) {
-                        if (confirmPasswordController.text.isNotEmpty) {
-                          _formKey.currentState?.validate();
+                      onFieldSubmitted: (_) {
+                        if (!isLoading) {
+                          signin();
                         }
                       },
 
@@ -412,52 +416,34 @@ class _SignupPageState extends State<SignupPage> {
                       ),
                     ),
 
-                    const SizedBox(height: 18),
-
-                    // CONFIRM PASSWORD
-                    TextFormField(
-                      controller: confirmPasswordController,
-                      obscureText: obscureConfirmPassword,
-                      textInputAction: TextInputAction.done,
-
-                      validator: (value) {
-                        if (value == null || value.isEmpty) {
-                          return 'Please confirm your password';
-                        }
-
-                        if (value != passwordController.text) {
-                          return 'Passwords do not match';
-                        }
-
-                        return null;
-                      },
-
-                      decoration: inputDecoration(
-                        label: 'Confirm Password',
-                        hint: 'Re-enter your password',
-                        icon: Icons.lock_reset_outlined,
-                        suffixIcon: IconButton(
-                          icon: Icon(
-                            obscureConfirmPassword
-                                ? Icons.visibility_off_outlined
-                                : Icons.visibility_outlined,
+                    // ------------------------------------------------
+                    // FORGOT PASSWORD
+                    // ------------------------------------------------
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: () {
+                          Navigator.pushNamed(context, '/forgot-password');
+                        },
+                        child: Text(
+                          'Forgot Password?',
+                          style: TextStyle(
+                            color: primaryColor,
+                            fontWeight: FontWeight.w600,
                           ),
-                          onPressed: () {
-                            setState(() {
-                              obscureConfirmPassword = !obscureConfirmPassword;
-                            });
-                          },
                         ),
                       ),
                     ),
 
-                    const SizedBox(height: 26),
+                    const SizedBox(height: 8),
 
-                    // SIGN UP BUTTON
+                    // ------------------------------------------------
+                    // SIGN IN BUTTON
+                    // ------------------------------------------------
                     SizedBox(
                       height: 56,
                       child: ElevatedButton(
-                        onPressed: isLoading ? null : signup,
+                        onPressed: isLoading ? null : signin,
 
                         style: ElevatedButton.styleFrom(
                           backgroundColor: primaryColor,
@@ -465,9 +451,7 @@ class _SignupPageState extends State<SignupPage> {
                           disabledBackgroundColor: primaryColor.withOpacity(
                             0.5,
                           ),
-
                           elevation: 0,
-
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(14),
                           ),
@@ -483,7 +467,7 @@ class _SignupPageState extends State<SignupPage> {
                                 ),
                               )
                             : const Text(
-                                'Create Account',
+                                'Sign In',
                                 style: TextStyle(
                                   fontSize: 16,
                                   fontWeight: FontWeight.w700,
@@ -492,35 +476,25 @@ class _SignupPageState extends State<SignupPage> {
                       ),
                     ),
 
-                    const SizedBox(height: 24),
-
-                    // TERMS
-                    const Text(
-                      'By creating an account, you agree to use CivicMind responsibly and provide accurate information.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF9CA3AF),
-                        height: 1.5,
-                      ),
-                    ),
-
                     const SizedBox(height: 26),
 
-                    // SIGN IN
+                    // ------------------------------------------------
+                    // CREATE ACCOUNT
+                    // ------------------------------------------------
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         const Text(
-                          'Already have an account? ',
+                          "Don't have an account? ",
                           style: TextStyle(color: Color(0xFF6B7280)),
                         ),
+
                         TextButton(
                           onPressed: () {
-                            Navigator.pushReplacementNamed(context, '/signin');
+                            Navigator.pushReplacementNamed(context, '/signup');
                           },
                           child: Text(
-                            'Sign In',
+                            'Create Account',
                             style: TextStyle(
                               color: primaryColor,
                               fontWeight: FontWeight.w700,
