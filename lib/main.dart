@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'signup_page.dart';
 import 'signin_page.dart';
@@ -56,68 +57,121 @@ class AuthWrapper extends StatefulWidget {
 }
 
 class _AuthWrapperState extends State<AuthWrapper> {
-  bool _checkingVerification = true;
+  bool _isLoading = true;
+
+  // Verification link থেকে এসেছে কি না
   bool _verificationLinkClicked = false;
+
+  // Password recovery link থেকে এসেছে কি না
+  bool _recoveryLinkClicked = false;
+
+  // User আগে account create করেছে কি না
+  bool _hasAccount = false;
 
   @override
   void initState() {
     super.initState();
-    _checkVerificationRedirect();
+    _initializeAuth();
   }
 
-  Future<void> _checkVerificationRedirect() async {
-    final uri = Uri.base;
+  Future<void> _initializeAuth() async {
+    try {
+      final supabase = Supabase.instance.client;
+      final uri = Uri.base;
 
-    // ----------------------------------------------------------
-    // EMAIL VERIFICATION REDIRECT
-    // ----------------------------------------------------------
-    //
-    // Signup থেকে আমরা:
-    //   ?verified=true
-    //
-    // পাঠাব।
-    //
-    // তাই verification link click করার পরে
-    // এই condition true হবে।
-    // ----------------------------------------------------------
+      final prefs = await SharedPreferences.getInstance();
 
-    if (uri.queryParameters['verified'] == 'true') {
-      _verificationLinkClicked = true;
+      // ----------------------------------------------------------
+      // CHECK IF USER HAS CREATED AN ACCOUNT BEFORE
+      // ----------------------------------------------------------
 
-      // Verification link-এর মাধ্যমে Supabase temporary
-      // session তৈরি করতে পারে।
-      //
-      // কিন্তু আমরা চাই user নিজে Sign In করুক।
-      //
-      // তাই existing session থাকলে sign out করে দিচ্ছি।
-      if (Supabase.instance.client.auth.currentSession != null) {
-        await Supabase.instance.client.auth.signOut();
+      _hasAccount = prefs.getBool('has_account') ?? false;
+
+      // ----------------------------------------------------------
+      // EMAIL VERIFICATION LINK
+      // ----------------------------------------------------------
+
+      if (uri.queryParameters['verified'] == 'true') {
+        _verificationLinkClicked = true;
+
+        // Verification link-এর মাধ্যমে Supabase temporary
+        // session তৈরি করতে পারে।
+        //
+        // কিন্তু আমাদের app logic অনুযায়ী user-কে
+        // manually Sign In করতে হবে।
+        if (supabase.auth.currentSession != null) {
+          await supabase.auth.signOut();
+        }
       }
+
+      // ----------------------------------------------------------
+      // PASSWORD RECOVERY LINK
+      // ----------------------------------------------------------
+
+      if (uri.queryParameters['recovery'] == 'true') {
+        _recoveryLinkClicked = true;
+      }
+
+      // ----------------------------------------------------------
+      // AUTH STATE LISTENER
+      // ----------------------------------------------------------
+      //
+      // Password recovery হলে ResetPasswordPage দেখাবে।
+      //
+      supabase.auth.onAuthStateChange.listen((data) {
+        final event = data.event;
+
+        if (event == AuthChangeEvent.passwordRecovery) {
+          if (mounted) {
+            setState(() {
+              _recoveryLinkClicked = true;
+              _isLoading = false;
+            });
+          }
+        }
+      });
+    } catch (e) {
+      // কোনো unexpected error হলেও app আটকে থাকবে না।
+      debugPrint('Auth initialization error: $e');
     }
 
     if (!mounted) return;
 
     setState(() {
-      _checkingVerification = false;
+      _isLoading = false;
     });
   }
 
   @override
   Widget build(BuildContext context) {
     // ----------------------------------------------------------
-    // CHECKING
+    // LOADING
     // ----------------------------------------------------------
 
-    if (_checkingVerification) {
+    if (_isLoading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     // ----------------------------------------------------------
-    // VERIFICATION LINK CLICKED
+    // PASSWORD RECOVERY
     // ----------------------------------------------------------
     //
-    // Verification email থেকে এলে সরাসরি Sign In page.
-    // Signup page দেখাবে না।
+    // Reset password email-এর link click করলে
+    // সরাসরি ResetPasswordPage.
+    // ----------------------------------------------------------
+
+    if (_recoveryLinkClicked) {
+      return const ResetPasswordPage();
+    }
+
+    // ----------------------------------------------------------
+    // EMAIL VERIFICATION
+    // ----------------------------------------------------------
+    //
+    // Verification link click করলে
+    // সরাসরি Home নয়।
+    //
+    // User manually email + password দিয়ে Sign In করবে।
     // ----------------------------------------------------------
 
     if (_verificationLinkClicked) {
@@ -125,7 +179,15 @@ class _AuthWrapperState extends State<AuthWrapper> {
     }
 
     // ----------------------------------------------------------
-    // NORMAL APP OPEN
+    // EXISTING ACTIVE SESSION
+    // ----------------------------------------------------------
+    //
+    // User আগে login করে রেখেছে এবং session এখনো valid।
+    //
+    // App বন্ধ করে আবার খুললেও:
+    //
+    // Session থাকলে → Home
+    //
     // ----------------------------------------------------------
 
     final session = Supabase.instance.client.auth.currentSession;
@@ -135,7 +197,24 @@ class _AuthWrapperState extends State<AuthWrapper> {
     }
 
     // ----------------------------------------------------------
-    // NO SESSION
+    // NO SESSION BUT ACCOUNT EXISTS
+    // ----------------------------------------------------------
+    //
+    // User আগে account তৈরি করেছে কিন্তু বর্তমানে
+    // login করা নেই।
+    //
+    // তাই Signup নয়, Sign In দেখাব।
+    // ----------------------------------------------------------
+
+    if (_hasAccount) {
+      return const SigninPage();
+    }
+
+    // ----------------------------------------------------------
+    // FIRST TIME USER
+    // ----------------------------------------------------------
+    //
+    // একদম নতুন user হলে Signup.
     // ----------------------------------------------------------
 
     return const SignupPage();

@@ -58,7 +58,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
 
       await Supabase.instance.client.auth.resetPasswordForEmail(
         email,
-        redirectTo: '${Uri.base.origin}/reset-password',
+        redirectTo: '${Uri.base.origin}?recovery=true',
       );
 
       if (!mounted) return;

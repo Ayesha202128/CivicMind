@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class SignupPage extends StatefulWidget {
   const SignupPage({super.key});
@@ -109,8 +110,9 @@ class _SignupPageState extends State<SignupPage> {
       final response = await Supabase.instance.client.auth.signUp(
         email: email,
         password: password,
-        emailRedirectTo: Uri.base.origin,
+        emailRedirectTo: '${Uri.base.origin}?verified=true',
       );
+
       if (!mounted) return;
 
       final user = response.user;
@@ -129,6 +131,9 @@ class _SignupPageState extends State<SignupPage> {
       // ------------------------------------------------------
 
       if (user != null) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('has_account', true);
+
         Navigator.pushReplacementNamed(
           context,
           '/verify-email',
