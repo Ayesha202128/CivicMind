@@ -1,6 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'signup_page.dart';
 import 'signin_page.dart';
@@ -59,14 +60,14 @@ class AuthWrapper extends StatefulWidget {
 class _AuthWrapperState extends State<AuthWrapper> {
   bool _isLoading = true;
 
-  // Verification link থেকে এসেছে কি না
+  // Email verification link থেকে এসেছে কি না
   bool _verificationLinkClicked = false;
 
   // Password recovery link থেকে এসেছে কি না
   bool _recoveryLinkClicked = false;
 
-  // User আগে account create করেছে কি না
-  bool _hasAccount = false;
+  // Auth state listener-এর subscription
+  StreamSubscription<AuthState>? _authSubscription;
 
   @override
   void initState() {
@@ -75,17 +76,10 @@ class _AuthWrapperState extends State<AuthWrapper> {
   }
 
   Future<void> _initializeAuth() async {
+    final supabase = Supabase.instance.client;
+
     try {
-      final supabase = Supabase.instance.client;
       final uri = Uri.base;
-
-      final prefs = await SharedPreferences.getInstance();
-
-      // ----------------------------------------------------------
-      // CHECK IF USER HAS CREATED AN ACCOUNT BEFORE
-      // ----------------------------------------------------------
-
-      _hasAccount = prefs.getBool('has_account') ?? false;
 
       // ----------------------------------------------------------
       // EMAIL VERIFICATION LINK
@@ -94,11 +88,8 @@ class _AuthWrapperState extends State<AuthWrapper> {
       if (uri.queryParameters['verified'] == 'true') {
         _verificationLinkClicked = true;
 
-        // Verification link-এর মাধ্যমে Supabase temporary
-        // session তৈরি করতে পারে।
-        //
-        // কিন্তু আমাদের app logic অনুযায়ী user-কে
-        // manually Sign In করতে হবে।
+        // Verification-এর পরে যদি temporary session থাকে,
+        // user-কে manually Sign In করানোর জন্য sign out করছি।
         if (supabase.auth.currentSession != null) {
           await supabase.auth.signOut();
         }
@@ -115,23 +106,27 @@ class _AuthWrapperState extends State<AuthWrapper> {
       // ----------------------------------------------------------
       // AUTH STATE LISTENER
       // ----------------------------------------------------------
-      //
-      // Password recovery হলে ResetPasswordPage দেখাবে।
-      //
-      supabase.auth.onAuthStateChange.listen((data) {
-        final event = data.event;
 
-        if (event == AuthChangeEvent.passwordRecovery) {
-          if (mounted) {
+      _authSubscription = supabase.auth.onAuthStateChange.listen(
+        (data) {
+          final event = data.event;
+
+          if (!mounted) return;
+
+          // Password recovery link process complete হলে
+          // ResetPasswordPage দেখানো হবে।
+          if (event == AuthChangeEvent.passwordRecovery) {
             setState(() {
               _recoveryLinkClicked = true;
               _isLoading = false;
             });
           }
-        }
-      });
+        },
+        onError: (error) {
+          debugPrint('Auth state listener error: $error');
+        },
+      );
     } catch (e) {
-      // কোনো unexpected error হলেও app আটকে থাকবে না।
       debugPrint('Auth initialization error: $e');
     }
 
@@ -140,6 +135,12 @@ class _AuthWrapperState extends State<AuthWrapper> {
     setState(() {
       _isLoading = false;
     });
+  }
+
+  @override
+  void dispose() {
+    _authSubscription?.cancel();
+    super.dispose();
   }
 
   @override
@@ -155,10 +156,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
     // ----------------------------------------------------------
     // PASSWORD RECOVERY
     // ----------------------------------------------------------
-    //
-    // Reset password email-এর link click করলে
-    // সরাসরি ResetPasswordPage.
-    // ----------------------------------------------------------
 
     if (_recoveryLinkClicked) {
       return const ResetPasswordPage();
@@ -167,27 +164,29 @@ class _AuthWrapperState extends State<AuthWrapper> {
     // ----------------------------------------------------------
     // EMAIL VERIFICATION
     // ----------------------------------------------------------
-    //
-    // Verification link click করলে
-    // সরাসরি Home নয়।
-    //
-    // User manually email + password দিয়ে Sign In করবে।
-    // ----------------------------------------------------------
 
     if (_verificationLinkClicked) {
       return const SigninPage();
     }
 
     // ----------------------------------------------------------
-    // EXISTING ACTIVE SESSION
+    // ACTIVE SESSION
     // ----------------------------------------------------------
     //
-    // User আগে login করে রেখেছে এবং session এখনো valid।
+    // এটিই এখন authentication-এর মূল source of truth।
     //
-    // App বন্ধ করে আবার খুললেও:
+    // Session আছে → Home
+    // Session নেই → Sign In
+    // ----------------------------------------------------------
+
+    // ----------------------------------------------------------
+    // ACTIVE SESSION
+    // ----------------------------------------------------------
     //
-    // Session থাকলে → Home
+    // এটিই এখন authentication-এর মূল source of truth.
     //
+    // Session আছে → Home
+    // Session নেই → Sign In
     // ----------------------------------------------------------
 
     final session = Supabase.instance.client.auth.currentSession;
@@ -197,26 +196,32 @@ class _AuthWrapperState extends State<AuthWrapper> {
     }
 
     // ----------------------------------------------------------
-    // NO SESSION BUT ACCOUNT EXISTS
+    // NO ACTIVE SESSION
     // ----------------------------------------------------------
     //
-    // User আগে account তৈরি করেছে কিন্তু বর্তমানে
-    // login করা নেই।
+    // Supabase session নেই → Sign In
     //
-    // তাই Signup নয়, Sign In দেখাব।
+    // Sign In page থেকেই নতুন user Create Account করতে পারবে.
     // ----------------------------------------------------------
 
-    if (_hasAccount) {
-      return const SigninPage();
+    return const SigninPage();
+
+    if (session != null) {
+      return const HomePage();
     }
 
     // ----------------------------------------------------------
-    // FIRST TIME USER
+    // NO ACTIVE SESSION
     // ----------------------------------------------------------
     //
-    // একদম নতুন user হলে Signup.
+    // Account আগে তৈরি হয়েছে কি না সেটা আর
+    // SharedPreferences দিয়ে check করছি না।
+    //
+    // Supabase session নেই → Sign In
+    //
+    // Sign In page থেকেই নতুন user Create Account করতে পারবে।
     // ----------------------------------------------------------
 
-    return const SignupPage();
+    return const SigninPage();
   }
 }
